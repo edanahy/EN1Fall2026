@@ -1,0 +1,844 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Whack-a-Mole Tug of War</title>
+<!--
+  A two-player whack-a-mole game that moves a SPIKE Prime car like a progress
+  bar. The hub runs main.py from this folder (a spikecomm Peripheral); this
+  page connects to it with Web Bluetooth and sends the same messages as
+  index.html: "forward;250", "back;250" and "stop;250".
+
+    Player 1: Q W E        Player 2: I O P
+
+  Whack a mole first and the car drives one step toward you. Whack an empty
+  hole and it drives one step away from you. Pull the car all the way to your
+  side to win.
+
+  Put the car in the middle between the players, facing Player 1 (so W in
+  index.html drives it toward Player 1). Works in Chrome or Edge, and works
+  without a car too (the car just doesn't move).
+-->
+<style>
+  :root {
+    --bg: #f3f4f6;
+    --panel: #ffffff;
+    --text: #1c2230;
+    --muted: #5c6475;
+    --border: #d6dae1;
+    --accent: #1f5fd6;
+    --accent-text: #ffffff;
+    --ok: #18794e;
+    --busy: #a35c00;
+    --error: #c62828;
+    --off: #8a91a0;
+    --code-bg: #eceef2;
+    --p1: #1d64d8;
+    --p1-soft: #dbe7fb;
+    --p2: #c45a00;
+    --p2-soft: #fbe6d4;
+    --ground: #e2efd8;
+    --dirt: #a27b56;
+    --pit: #3a281a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #111318;
+      --panel: #1a1d24;
+      --text: #e6e8ec;
+      --muted: #9aa1ae;
+      --border: #2e333d;
+      --accent: #5b8ff0;
+      --accent-text: #0c1220;
+      --ok: #4cc38a;
+      --busy: #e0a23a;
+      --error: #ef6b6b;
+      --off: #6b7280;
+      --code-bg: #242833;
+      --p1: #6aa2f5;
+      --p1-soft: #1f3355;
+      --p2: #f0a050;
+      --p2-soft: #4a3220;
+      --ground: #1e2a1c;
+      --dirt: #6e5236;
+      --pit: #120c07;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #111318;
+    --panel: #1a1d24;
+    --text: #e6e8ec;
+    --muted: #9aa1ae;
+    --border: #2e333d;
+    --accent: #5b8ff0;
+    --accent-text: #0c1220;
+    --ok: #4cc38a;
+    --busy: #e0a23a;
+    --error: #ef6b6b;
+    --off: #6b7280;
+    --code-bg: #242833;
+    --p1: #6aa2f5;
+    --p1-soft: #1f3355;
+    --p2: #f0a050;
+    --p2-soft: #4a3220;
+    --ground: #1e2a1c;
+    --dirt: #6e5236;
+    --pit: #120c07;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 16px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  main {
+    max-width: 920px;
+    margin: 0 auto;
+    padding: 24px 16px 48px;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 16px;
+  }
+  h1 { margin: 0; font-size: 1.5rem; }
+  h2 { margin: 0; font-size: 1rem; }
+  header p { margin: 4px 0 0; color: var(--muted); }
+  code {
+    background: var(--code-bg);
+    border-radius: 4px;
+    padding: 1px 5px;
+    font-size: 0.9em;
+  }
+  kbd {
+    display: inline-block;
+    min-width: 1.9em;
+    padding: 2px 6px;
+    border: 1px solid var(--border);
+    border-bottom-width: 3px;
+    border-radius: 6px;
+    background: var(--panel);
+    font: 700 0.9rem/1.3 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    text-align: center;
+  }
+  kbd.p1 { color: var(--p1); border-color: var(--p1); }
+  kbd.p2 { color: var(--p2); border-color: var(--p2); }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px;
+  }
+  button {
+    font: inherit;
+    font-weight: 600;
+    padding: 8px 18px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--panel);
+    color: var(--text);
+    cursor: pointer;
+  }
+  button.primary { border-color: var(--accent); background: var(--accent); color: var(--accent-text); }
+  button:disabled { opacity: 0.5; cursor: default; }
+  select {
+    font: inherit;
+    padding: 6px 8px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--bg);
+    color: var(--text);
+  }
+
+  /* Connection */
+  .connect { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+  .status { display: flex; align-items: center; gap: 8px; margin: 0; flex: 1 1 260px; }
+  .status::before {
+    content: "";
+    width: 10px;
+    height: 10px;
+    flex: none;
+    border-radius: 50%;
+    background: var(--off);
+  }
+  .status[data-state="connected"]::before { background: var(--ok); }
+  .status[data-state="busy"]::before { background: var(--busy); }
+  .status[data-state="error"]::before { background: var(--error); }
+
+  /* Track: where the car is, Player 1 on the left */
+  .track { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 12px; }
+  .end { font-weight: 700; white-space: nowrap; }
+  .end.p1 { color: var(--p1); }
+  .end.p2 { color: var(--p2); }
+  .lane {
+    position: relative;
+    height: 44px;
+    margin: 0 22px;
+  }
+  .lane::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 50%;
+    height: 10px;
+    margin-top: -5px;
+    border-radius: 5px;
+    background: linear-gradient(to right, var(--p1), var(--p1-soft) 45%, var(--p2-soft) 55%, var(--p2));
+  }
+  .tick {
+    position: absolute;
+    top: 50%;
+    width: 2px;
+    height: 18px;
+    margin: -9px 0 0 -1px;
+    background: var(--border);
+  }
+  .tick.middle { height: 26px; margin-top: -13px; background: var(--muted); }
+  .car {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 44px;
+    height: 26px;
+    transform: translate(-50%, -50%);
+    transition: left 300ms ease-out;
+    color: var(--text);
+  }
+  .car svg { display: block; width: 100%; height: 100%; }
+  .track-text { margin: 4px 0 0; text-align: center; color: var(--muted); font-size: 0.875rem; }
+
+  /* Message line */
+  .message {
+    margin: 12px 0;
+    min-height: 2.6rem;
+    text-align: center;
+    font-size: 1.75rem;
+    font-weight: 800;
+    line-height: 2.6rem;
+  }
+  .message.p1 { color: var(--p1); }
+  .message.p2 { color: var(--p2); }
+
+  /* Players and holes */
+  .arena {
+    display: grid;
+    grid-template-columns: 140px minmax(0, 1fr) 140px;
+    grid-template-areas: "p1 holes p2";
+    gap: 16px;
+    align-items: center;
+  }
+  .player {
+    border: 2px solid var(--border);
+    border-radius: 12px;
+    padding: 12px;
+    text-align: center;
+  }
+  .player.p1 { grid-area: p1; border-color: var(--p1); background: var(--p1-soft); }
+  .player.p2 { grid-area: p2; border-color: var(--p2); background: var(--p2-soft); }
+  .player.p1 h2 { color: var(--p1); }
+  .player.p2 h2 { color: var(--p2); }
+  .player .keys { display: flex; justify-content: center; gap: 4px; margin: 8px 0; }
+  .player p { margin: 0; font-size: 0.9rem; }
+  .player b { font-variant-numeric: tabular-nums; }
+
+  .holes {
+    grid-area: holes;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+    padding: 12px 8px 4px;
+    border-radius: 12px;
+    background: var(--ground);
+  }
+  .hole {
+    position: relative;
+    aspect-ratio: 1 / 1.1;
+  }
+  .pit {
+    position: absolute;
+    left: 8%;
+    right: 8%;
+    bottom: 20%;
+    height: 20%;
+    border-radius: 50%;
+    background: var(--pit);
+    box-shadow: 0 0 0 7px var(--dirt);
+    transition: box-shadow 120ms;
+  }
+  .window {     /* the mole is cut off at the middle of the pit, so it looks like it's in it */
+    position: absolute;
+    left: 15%;
+    right: 15%;
+    top: 4%;
+    bottom: 30%;
+    overflow: hidden;
+  }
+  .mole {
+    position: absolute;
+    left: 0;
+    bottom: 0;
+    display: block;
+    width: 100%;
+    aspect-ratio: 1;
+    transform: translateY(100%);
+    transition: transform 160ms ease-out;
+  }
+  .hole[data-state="up"] .mole { transform: translateY(0); }
+  .hole[data-state="bonked"] .mole { transform: translateY(20%); transition-duration: 80ms; }
+  .hole[data-state="hiding"] .mole { transition: transform 200ms linear; }
+  .eyes-x { display: none; }
+  .hole[data-state="bonked"] .eyes-x { display: inline; }
+  .hole[data-state="bonked"] .eyes-open { display: none; }
+  .hole[data-state="bonked"][data-by="1"] .pit, .hole[data-miss="1"] .pit { box-shadow: 0 0 0 7px var(--p1); }
+  .hole[data-state="bonked"][data-by="2"] .pit, .hole[data-miss="2"] .pit { box-shadow: 0 0 0 7px var(--p2); }
+  .hole[data-state="bonked"]::before {
+    content: "✦ ✦ ✦";
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    text-align: center;
+    font-size: 1.1rem;
+    animation: wobble 300ms ease-in-out infinite alternate;
+  }
+  .hole[data-by="1"]::before { color: var(--p1); }
+  .hole[data-by="2"]::before { color: var(--p2); }
+  @keyframes wobble { from { transform: rotate(-8deg); } to { transform: rotate(8deg); } }
+  .hole-keys {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    display: flex;
+    justify-content: center;
+    gap: 6px;
+  }
+  .float {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 30%;
+    text-align: center;
+    font-weight: 800;
+    font-size: 1.15rem;
+    pointer-events: none;
+    animation: rise 700ms ease-out forwards;
+  }
+  .float.p1 { color: var(--p1); }
+  .float.p2 { color: var(--p2); }
+  .float.muted { color: var(--muted); }
+  @keyframes rise {
+    from { transform: translateY(0); opacity: 1; }
+    to { transform: translateY(-36px); opacity: 0; }
+  }
+
+  /* Controls */
+  .controls {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px 16px;
+    margin-top: 16px;
+  }
+  .controls label { display: flex; align-items: center; gap: 6px; }
+  .controls input { accent-color: var(--accent); width: 18px; height: 18px; }
+
+  .how h2 { margin-bottom: 8px; }
+  .how ul { margin: 0; padding-left: 20px; }
+  .how li + li { margin-top: 4px; }
+
+  @media (max-width: 640px) {
+    .arena {
+      grid-template-columns: 1fr 1fr;
+      grid-template-areas: "p1 p2" "holes holes";
+    }
+    .track { gap: 4px; }
+    .end { font-size: 0.875rem; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Whack-a-Mole Tug of War</h1>
+    <p>Two players, three moles, one SPIKE car. The hub runs <code>main.py</code> from this folder.</p>
+  </header>
+
+  <section class="panel connect">
+    <button id="connect" class="primary" type="button">Connect car</button>
+    <p id="status" class="status" role="status">Car not connected. You can still play; the car just won't move.</p>
+  </section>
+
+  <section class="panel">
+    <div class="track">
+      <span class="end p1">Player 1</span>
+      <div class="lane" id="lane">
+        <div class="car" id="car" aria-hidden="true">
+          <!-- the car faces Player 1, on the left -->
+          <svg viewBox="0 0 48 28">
+            <rect x="8" y="4" width="36" height="15" rx="4" fill="currentColor"/>
+            <rect x="3" y="9" width="8" height="7" rx="2" fill="#f2c300"/>
+            <circle cx="15" cy="21" r="6" fill="#30343c"/>
+            <circle cx="37" cy="21" r="6" fill="#30343c"/>
+            <circle cx="15" cy="21" r="2.2" fill="#c9ced6"/>
+            <circle cx="37" cy="21" r="2.2" fill="#c9ced6"/>
+          </svg>
+        </div>
+      </div>
+      <span class="end p2">Player 2</span>
+    </div>
+    <p class="track-text" id="track-text">The car is in the middle</p>
+
+    <p class="message" id="message" aria-live="polite">Press Start</p>
+
+    <div class="arena">
+      <div class="player p1">
+        <h2>Player 1</h2>
+        <div class="keys"><kbd class="p1">Q</kbd><kbd class="p1">W</kbd><kbd class="p1">E</kbd></div>
+        <p><b id="hits1">0</b> hits · <b id="misses1">0</b> misses</p>
+      </div>
+      <div class="holes" id="holes"></div>
+      <div class="player p2">
+        <h2>Player 2</h2>
+        <div class="keys"><kbd class="p2">I</kbd><kbd class="p2">O</kbd><kbd class="p2">P</kbd></div>
+        <p><b id="hits2">0</b> hits · <b id="misses2">0</b> misses</p>
+      </div>
+    </div>
+
+    <div class="controls">
+      <button id="start" class="primary" type="button">Start</button>
+      <button id="stop" type="button" disabled>Stop</button>
+      <label>Points to win
+        <select id="win"><option>3</option><option selected>5</option><option>7</option></select>
+      </label>
+      <label>Moles
+        <select id="pace">
+          <option value="slow">Slow</option>
+          <option value="normal" selected>Normal</option>
+          <option value="fast">Fast</option>
+        </select>
+      </label>
+      <label>Car step
+        <select id="step">
+          <option value="small">Small</option>
+          <option value="medium" selected>Medium</option>
+          <option value="large">Large</option>
+        </select>
+      </label>
+      <label><input id="sound" type="checkbox" checked> Sound</label>
+    </div>
+  </section>
+
+  <section class="panel how">
+    <h2>How to play</h2>
+    <ul>
+      <li>Start <code>main.py</code> on the hub from the REPL (e.g. <code>mpremote run main.py</code>). Put the car in the middle of the table between the players, <strong>facing Player 1</strong>, and click <strong>Connect car</strong>.</li>
+      <li>Player 1 whacks with <kbd class="p1">Q</kbd> <kbd class="p1">W</kbd> <kbd class="p1">E</kbd>, Player 2 with <kbd class="p2">I</kbd> <kbd class="p2">O</kbd> <kbd class="p2">P</kbd>, one key per hole.</li>
+      <li>Whack a mole first: the car drives one step <strong>toward you</strong>. Whack an empty hole: it drives one step <strong>away from you</strong>. A mole someone already whacked doesn't count for anyone.</li>
+      <li>Pull the car all the way to your side to win. Press Space to start and Esc to stop. A new game drives the car back to the middle first.</li>
+    </ul>
+  </section>
+</main>
+
+<template id="hole-template">
+  <div class="hole" data-state="empty">
+    <div class="pit"></div>
+    <div class="window">
+      <svg class="mole" viewBox="0 0 100 100" aria-hidden="true">
+        <path d="M14 100V52a36 36 0 0 1 72 0v48z" fill="#7b5233"/>
+        <ellipse cx="50" cy="84" rx="23" ry="22" fill="#b98d62"/>
+        <g class="eyes-open">
+          <circle cx="38" cy="45" r="5" fill="#1a1a1a"/>
+          <circle cx="62" cy="45" r="5" fill="#1a1a1a"/>
+          <circle cx="39.6" cy="43.4" r="1.7" fill="#fff"/>
+          <circle cx="63.6" cy="43.4" r="1.7" fill="#fff"/>
+        </g>
+        <g class="eyes-x" stroke="#1a1a1a" stroke-width="3" stroke-linecap="round">
+          <path d="M34 41l8 8M42 41l-8 8M58 41l8 8M66 41l-8 8"/>
+        </g>
+        <path d="M24 57h14M25 63l13-3M76 57H62M75 63l-13-3" stroke="#3a2616" stroke-width="1.5" stroke-linecap="round"/>
+        <ellipse cx="50" cy="58" rx="8" ry="6" fill="#e98fa0"/>
+        <rect x="45.5" y="65" width="9" height="7" rx="1.5" fill="#fff"/>
+      </svg>
+    </div>
+    <div class="hole-keys"><kbd class="p1"></kbd><kbd class="p2"></kbd></div>
+  </div>
+</template>
+
+<script>
+// ── Settings you can change ──────────────────────────────────────────────────
+
+const CAR_SPEED = 250;     // degrees per second while the car takes a step
+const STEP_MS = { small: 250, medium: 400, large: 600 };   // how long one step drives
+const PACES = {            // milliseconds, [shortest, longest]
+  slow:   { gap: [1000, 2000], stay: [1500, 2200] },   // gap: between moles popping up
+  normal: { gap: [700, 1500],  stay: [1100, 1600] },   // stay: how long a mole stays up
+  fast:   { gap: [450, 1000],  stay: [750, 1100] },
+};
+const BONK_MS = 450;       // a whacked mole stays up this long; more whacks on it don't count
+const HIDE_MS = 200;       // a mole going back down can still be whacked
+// Keyboard key (by position, so it works on any layout) -> [player, hole]
+const KEYS = {
+  KeyQ: [1, 0], KeyW: [1, 1], KeyE: [1, 2],
+  KeyI: [2, 0], KeyO: [2, 1], KeyP: [2, 2],
+};
+
+// ── Page parts ───────────────────────────────────────────────────────────────
+
+const $ = (id) => document.getElementById(id);
+const connectButton = $("connect"), statusLine = $("status"), message = $("message");
+const startButton = $("start"), stopButton = $("stop");
+const winSelect = $("win"), paceSelect = $("pace"), stepSelect = $("step"), soundBox = $("sound");
+const lane = $("lane"), carMarker = $("car"), trackText = $("track-text");
+
+const holes = [0, 1, 2].map((i) => {
+  const el = $("hole-template").content.firstElementChild.cloneNode(true);
+  el.querySelector("kbd.p1").textContent = "QWE"[i];
+  el.querySelector("kbd.p2").textContent = "IOP"[i];
+  $("holes").append(el);
+  return { el, state: "empty", timer: null };   // state: empty, up, hiding, bonked
+});
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const rand = ([low, high]) => low + Math.random() * (high - low);
+
+// ── Bluetooth: the same Nordic UART Service as index.html ────────────────────
+
+const SERVICE = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
+const TO_HUB  = "6e400002-b5a3-f393-e0a9-e50e24dcca9e";   // write here: main.py's on_command gets it
+const TO_PAGE = "6e400003-b5a3-f393-e0a9-e50e24dcca9e";   // main.py echoes each command back here
+
+let device = null;
+let toHub = null;    // set while connected
+
+function setStatus(text, state = "") {
+  statusLine.textContent = text;
+  statusLine.dataset.state = state;
+}
+
+async function connect() {
+  try {
+    device = await navigator.bluetooth.requestDevice({ filters: [{ services: [SERVICE] }] });
+  } catch (e) {
+    setStatus(e.name === "NotFoundError" ? "No hub chosen." : e.message, "error");
+    return;
+  }
+  setStatus(`Connecting to ${device.name || "hub"}…`, "busy");
+  connectButton.disabled = true;
+  try {
+    device.ongattserverdisconnected = onDisconnected;
+    const server = await device.gatt.connect();
+    const service = await server.getPrimaryService(SERVICE);
+    const toPage = await service.getCharacteristic(TO_PAGE);
+    toPage.oncharacteristicvaluechanged = onData;
+    await toPage.startNotifications();
+    toHub = await service.getCharacteristic(TO_HUB);
+  } catch (e) {
+    setStatus(`Couldn't connect: ${e.message}`, "error");
+    if (device.gatt.connected) device.gatt.disconnect();
+    connectButton.disabled = false;
+    return;
+  }
+  carAt = 0;           // we take it that the car starts in the middle
+  pending = 0;
+  setStatus(`Car connected (${device.name || "hub"}). It should be in the middle, facing Player 1.`, "connected");
+  connectButton.textContent = "Disconnect";
+  connectButton.disabled = false;
+}
+
+function onDisconnected() {
+  if (!toHub) return;
+  toHub = null;
+  pending = 0;
+  setStatus("Car disconnected (main.py stopped it). Click Connect car to use it again.", "error");
+  connectButton.textContent = "Connect car";
+}
+
+connectButton.addEventListener("click", () => {
+  if (toHub) device.gatt.disconnect();
+  else connect();
+});
+
+// Messages from the hub end with "\n" and can arrive in pieces. main.py only
+// echoes our commands, so they just go to the browser console.
+const decoder = new TextDecoder();
+let partial = "";
+function onData(event) {
+  partial += decoder.decode(event.target.value, { stream: true });
+  const lines = partial.split("\n");
+  partial = lines.pop();
+  for (const line of lines) console.log("Hub:", line);
+}
+
+// Send text plus "\n" in writes of at most 20 bytes, one write at a time, in order
+const encoder = new TextEncoder();
+let queue = Promise.resolve();
+function send(text) {
+  queue = queue.then(async () => {
+    if (!toHub) return;
+    const bytes = encoder.encode(text + "\n");
+    for (let i = 0; i < bytes.length; i += 20) {
+      await toHub.writeValueWithResponse(bytes.slice(i, i + 20));
+    }
+  }).catch((e) => console.warn("Send failed:", e.message));
+}
+
+// ── The car: one step = drive for a moment, then stop ────────────────────────
+
+let carAt = 0;       // steps the car has driven since it was put in the middle: + toward Player 1
+let pending = 0;     // steps it still has to drive
+let driving = null;  // a promise while the car is driving
+
+function moveCar(steps) {
+  if (!toHub) return;
+  pending += steps;
+  if (!driving) driving = drive().finally(() => { driving = null; });
+}
+
+async function drive() {
+  // Steps the same way are driven in one go; opposite steps cancel out
+  let move = "stop";
+  while (pending !== 0 && toHub) {
+    const way = Math.sign(pending);
+    const next = way > 0 ? "forward" : "back";
+    if (next !== move) send(`${next};${CAR_SPEED}`);
+    move = next;
+    pending -= way;
+    carAt += way;
+    await sleep(STEP_MS[stepSelect.value]);
+  }
+  pending = 0;
+  send(`stop;${CAR_SPEED}`);
+}
+
+// ── Sound ────────────────────────────────────────────────────────────────────
+
+let audio = null;    // made on the first Start click: browsers only allow sound after a click
+
+function beep(freq, seconds, type = "square", volume = 0.06, delay = 0) {
+  if (!audio || !soundBox.checked) return;
+  const t = audio.currentTime + delay;
+  const osc = audio.createOscillator();
+  const gain = audio.createGain();
+  osc.type = type;
+  osc.frequency.setValueAtTime(freq, t);
+  gain.gain.setValueAtTime(volume, t);
+  gain.gain.exponentialRampToValueAtTime(0.0001, t + seconds);
+  osc.connect(gain).connect(audio.destination);
+  osc.start(t);
+  osc.stop(t + seconds);
+}
+
+// ── The game ─────────────────────────────────────────────────────────────────
+
+let state = "idle";  // idle, returning, countdown, playing, over
+let game = 0;        // goes up on every Start and Stop, so old timers know to quit
+let score = 0;       // + toward Player 1; someone wins at +win or -win
+let win = Number(winSelect.value);
+let moleTimer = null;
+const stats = { 1: { hits: 0, misses: 0 }, 2: { hits: 0, misses: 0 } };
+
+function showMessage(text, player = 0) {
+  message.textContent = text;
+  message.className = player ? `message p${player}` : "message";
+}
+
+function drawTrack() {
+  for (const tick of lane.querySelectorAll(".tick")) tick.remove();
+  for (let i = -win; i <= win; i++) {
+    const tick = document.createElement("div");
+    tick.className = i === 0 ? "tick middle" : "tick";
+    tick.style.left = `${50 - (i / win) * 50}%`;
+    lane.append(tick);
+  }
+  carMarker.style.left = `${50 - (score / win) * 50}%`;   // Player 1 is on the left
+  const steps = Math.abs(score);
+  trackText.textContent = score === 0 ? "The car is in the middle"
+    : `The car is ${steps} step${steps === 1 ? "" : "s"} toward Player ${score > 0 ? 1 : 2}`;
+}
+
+function drawStats() {
+  for (const p of [1, 2]) {
+    $(`hits${p}`).textContent = stats[p].hits;
+    $(`misses${p}`).textContent = stats[p].misses;
+  }
+}
+
+function drawButtons() {
+  const running = state === "returning" || state === "countdown" || state === "playing";
+  startButton.disabled = running;
+  stopButton.disabled = !running;
+}
+
+function setHole(hole, holeState, by) {
+  hole.state = holeState;
+  hole.el.dataset.state = holeState;
+  if (by) hole.el.dataset.by = by;
+}
+
+function clearHoles() {
+  for (const hole of holes) {
+    clearTimeout(hole.timer);
+    setHole(hole, "empty");
+  }
+}
+
+function popUp() {
+  const empty = holes.filter((h) => h.state === "empty");
+  if (empty.length === 0) return;
+  const hole = empty[Math.floor(Math.random() * empty.length)];
+  setHole(hole, "up");
+  beep(600, 0.07, "triangle", 0.05);
+  hole.timer = setTimeout(() => {
+    setHole(hole, "hiding");
+    hole.timer = setTimeout(() => setHole(hole, "empty"), HIDE_MS);
+  }, rand(PACES[paceSelect.value].stay));
+}
+
+function nextMole(id) {
+  moleTimer = setTimeout(() => {
+    if (id !== game) return;
+    popUp();
+    nextMole(id);
+  }, rand(PACES[paceSelect.value].gap));
+}
+
+function floatText(hole, text, className) {
+  const span = document.createElement("span");
+  span.className = `float ${className}`;
+  span.textContent = text;
+  span.addEventListener("animationend", () => span.remove());
+  hole.el.append(span);
+}
+
+function whack(player, i) {
+  if (state !== "playing") return;
+  const hole = holes[i];
+  if (hole.state === "up" || hole.state === "hiding") {
+    clearTimeout(hole.timer);
+    setHole(hole, "bonked", player);
+    hole.timer = setTimeout(() => setHole(hole, "empty"), BONK_MS);
+    stats[player].hits++;
+    floatText(hole, "+1", `p${player}`);
+    beep(330, 0.08);
+    beep(660, 0.12, "square", 0.06, 0.06);
+    carStep(player, true);
+  } else if (hole.state === "bonked") {
+    floatText(hole, "Too slow", "muted");      // someone already whacked this one
+  } else {
+    stats[player].misses++;
+    hole.el.dataset.miss = player;
+    setTimeout(() => delete hole.el.dataset.miss, 300);
+    floatText(hole, "Miss", `p${player}`);
+    beep(110, 0.25, "sawtooth", 0.05);
+    carStep(player, false);
+  }
+  drawStats();
+}
+
+// A hit pulls the car one step toward the player, a miss pushes it one step away
+function carStep(player, hit) {
+  const toward = player === 1 ? 1 : -1;
+  const steps = hit ? toward : -toward;
+  score += steps;
+  moveCar(steps);
+  drawTrack();
+  if (Math.abs(score) >= win) finish(score > 0 ? 1 : 2);
+}
+
+async function start() {
+  if (state === "returning" || state === "countdown" || state === "playing") return;
+  const id = ++game;
+  if (!audio && window.AudioContext) audio = new AudioContext();
+  audio?.resume();
+  win = Number(winSelect.value);
+  score = 0;
+  for (const p of [1, 2]) stats[p] = { hits: 0, misses: 0 };
+  clearHoles();
+  drawStats();
+  drawTrack();
+  if (toHub && carAt !== 0) {
+    state = "returning";
+    drawButtons();
+    showMessage("Driving the car back to the middle…");
+    pending = 0;
+    moveCar(-carAt);
+    if (driving) await driving;
+    await sleep(300);
+    if (id !== game) return;
+  }
+  state = "countdown";
+  drawButtons();
+  for (const count of ["3", "2", "1"]) {
+    showMessage(count);
+    beep(440, 0.15, "sine", 0.1);
+    await sleep(700);
+    if (id !== game) return;
+  }
+  showMessage("Go!");
+  beep(880, 0.3, "sine", 0.1);
+  state = "playing";
+  nextMole(id);
+}
+
+function finish(winner) {
+  game++;
+  state = "over";
+  clearTimeout(moleTimer);
+  setTimeout(clearHoles, BONK_MS);
+  showMessage(`Player ${winner} wins!`, winner);
+  [523, 659, 784, 1047].forEach((freq, i) => beep(freq, 0.25, "triangle", 0.08, 0.15 + i * 0.13));
+  drawButtons();
+}
+
+function stop() {
+  game++;
+  state = "idle";
+  clearTimeout(moleTimer);
+  clearHoles();
+  pending = 0;         // the car stops after the step it's on
+  showMessage("Stopped. Press Start to play again.");
+  drawButtons();
+}
+
+startButton.addEventListener("click", () => { startButton.blur(); start(); });
+stopButton.addEventListener("click", () => { stopButton.blur(); stop(); });
+winSelect.addEventListener("change", () => {
+  winSelect.blur();
+  if (state === "idle" || state === "over") {
+    win = Number(winSelect.value);
+    score = 0;
+    drawTrack();
+  }
+});
+for (const select of [paceSelect, stepSelect]) select.addEventListener("change", () => select.blur());
+
+document.addEventListener("keydown", (e) => {
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  const key = KEYS[e.code];
+  if (key) {
+    e.preventDefault();
+    if (!e.repeat) whack(...key);          // holding a key down is one whack
+  } else if (e.code === "Space" && !e.target.closest("button, select")) {
+    e.preventDefault();
+    start();
+  } else if (e.code === "Escape") {
+    if (state !== "idle" && state !== "over") stop();
+  }
+});
+
+// ── Can this browser do it? ──────────────────────────────────────────────────
+
+drawTrack();
+if (!window.isSecureContext) {
+  setStatus("Bluetooth needs this page on https:// or http://localhost. You can still play without the car.", "error");
+  connectButton.disabled = true;
+} else if (!navigator.bluetooth) {
+  setStatus("This browser can't use Bluetooth (use Chrome or Edge). You can still play without the car.", "error");
+  connectButton.disabled = true;
+}
+</script>
+</body>
+</html>
